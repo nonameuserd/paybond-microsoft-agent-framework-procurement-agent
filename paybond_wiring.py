@@ -31,6 +31,18 @@ def _spend_from_catalog(args: object) -> int:
     return spend_cents_for(sku, quantity)
 
 
+def _evidence_from_tool_result(result: object, _ctx: object) -> dict[str, Any]:
+    """Normalize JSON-string or dict tool results for cost_and_completion evidence."""
+    import json
+
+    payload: Any = result
+    if isinstance(result, str):
+        payload = json.loads(result)
+    if not isinstance(payload, dict):
+        raise TypeError("procurement.submit_po must return a JSON object")
+    return {"status": payload.get("status"), "cost_cents": payload.get("cost_cents")}
+
+
 def create_procurement_registry() -> Any:
     """Registry where ``procurement.submit_po`` spend is derived from the catalog."""
     return create_paybond_tool_registry(
@@ -41,12 +53,7 @@ def create_procurement_registry() -> Any:
                     "operation": PRIMARY_OPERATION,
                     "evidence_preset": "cost_and_completion",
                     "spend_cents": _spend_from_catalog,
-                    "evidence_mapper": lambda result, _ctx: {
-                        "status": result.get("status") if isinstance(result, dict) else None,
-                        "cost_cents": (
-                            result.get("cost_cents") if isinstance(result, dict) else None
-                        ),
-                    },
+                    "evidence_mapper": _evidence_from_tool_result,
                 }
             },
         }
