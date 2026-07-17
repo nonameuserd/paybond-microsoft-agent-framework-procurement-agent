@@ -1,15 +1,12 @@
 """Live Microsoft Agent Framework procurement agent gated by Paybond spend controls.
 
-Design notes (addressing common objections to in-tree samples):
+Design notes:
 
-- **Cost is not agent-decided.** ``submit_po(sku, quantity)`` prices from ``catalog``;
-  Harbor's spend resolver uses the same function before the tool body runs. The model
-  may pick a SKU; it must not invent ``amount_cents``.
-- **Sandbox demo, not a production finance product.** Use for learning the authorize →
-  execute → evidence path. Real money raises the bar on testing and ops.
+- **Cost is not agent-decided.** ``procurement.submit_po(sku, quantity)`` prices from
+  ``catalog``; Harbor's spend resolver uses the same lookup before the tool body runs.
+- **Sandbox demo, not a production finance product.**
 - **Middleware vs MAF HITL.** ``approval_mode="never_require"`` makes Paybond the spend
-  authority for this demo. Framework human-approval and Harbor spend gates are different
-  layers; this sample focuses on the economic side-effect path.
+  authority for this demo.
 
 Requires a Microsoft Agent Framework chat client. This sample uses Azure AI Foundry via
 ``AzureCliCredential`` (``az login``). Swap ``FoundryChatClient`` for any ``ChatClient``.
@@ -32,7 +29,7 @@ from paybond_config import create_paybond_client
 from paybond_wiring import PRIMARY_OPERATION, bind_procurement_run, maf_config_for_run
 
 
-@tool
+@tool(name="procurement.search_catalog")
 def search_catalog(
     query: Annotated[str, Field(description="Free-text catalog search query.")],
 ) -> dict[str, Any]:
@@ -40,7 +37,7 @@ def search_catalog(
     return {"query": query, "items": search(query)}
 
 
-@tool(approval_mode="never_require")
+@tool(name="procurement.submit_po", approval_mode="never_require")
 def submit_po(
     sku: Annotated[str, Field(description="Catalog SKU to purchase (e.g. LAP-14).")],
     quantity: Annotated[int, Field(description="Units to order.", ge=1)] = 1,

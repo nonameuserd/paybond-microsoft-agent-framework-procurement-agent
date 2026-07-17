@@ -9,7 +9,7 @@ Modes:
   python app.py --deny    # over-budget deny (RACK-1U @ $500 — tool body never runs)
 
 Cost is not chosen by the agent: Harbor prices the call from ``catalog`` via the
-spend resolver (SKU × quantity) before ``submit_po`` runs.
+spend resolver (SKU × quantity) before ``procurement.submit_po`` runs.
 """
 
 from __future__ import annotations
@@ -34,6 +34,11 @@ def search_catalog(query: str) -> dict[str, Any]:
     return {"query": query, "items": search(query)}
 
 
+# Tool name must match policy / Harbor operation (same as CrewAI starter).
+search_catalog.__name__ = "procurement.search_catalog"
+search_catalog.__qualname__ = "procurement.search_catalog"
+
+
 def submit_po(sku: str, quantity: int = 1) -> dict[str, Any]:
     """Submit a PO. Unit price comes from the catalog — callers do not pass dollars."""
     item = lookup(sku)
@@ -48,8 +53,12 @@ def submit_po(sku: str, quantity: int = 1) -> dict[str, Any]:
     }
 
 
+submit_po.__name__ = "procurement.submit_po"
+submit_po.__qualname__ = "procurement.submit_po"
+
+
 async def main() -> None:
-    """Bind a sandbox run, then push one synthetic ``submit_po`` call through the gate."""
+    """Bind a sandbox run, then push one synthetic ``procurement.submit_po`` call through the gate."""
     deny = "--deny" in sys.argv[1:]
     sku = "RACK-1U" if deny else "LAP-14"
     quantity = 1

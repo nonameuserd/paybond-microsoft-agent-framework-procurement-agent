@@ -1,8 +1,7 @@
 """Bind a sandbox run whose spend resolver prices tools from ``catalog``, not the LLM.
 
-This is the design the microsoft/agent-framework closer asked for: cost is a
-function of the function (SKU → catalog unit price × quantity), not an
-``amount_cents`` the agent invents.
+Cost is a function of the tool (SKU → catalog unit price × quantity), not an
+``amount_cents`` the agent invents — matching the intent of Harbor preflight.
 """
 
 from __future__ import annotations
@@ -18,22 +17,22 @@ from paybond_kit.microsoft_agent_framework import (
 
 from catalog import spend_cents_for
 
-PRIMARY_OPERATION = "submit_po"
-# Fund the sandbox intent for the happy-path laptop PO.
+PRIMARY_OPERATION = "procurement.submit_po"
+# Fund the sandbox intent for the happy-path laptop PO ($120).
 BOOTSTRAP_SPEND_CENTS = 12_000
 
 
 def _spend_from_catalog(args: object) -> int:
     """Harbor preflight: resolve spend from SKU/qty before the tool body runs."""
     if not isinstance(args, dict):
-        raise TypeError("submit_po arguments must be a mapping")
+        raise TypeError("procurement.submit_po arguments must be a mapping")
     sku = str(args["sku"])
     quantity = int(args.get("quantity", 1))
     return spend_cents_for(sku, quantity)
 
 
 def create_procurement_registry() -> Any:
-    """Registry where ``submit_po`` spend is derived from the catalog."""
+    """Registry where ``procurement.submit_po`` spend is derived from the catalog."""
     return create_paybond_tool_registry(
         {
             "default_deny": True,

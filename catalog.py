@@ -1,7 +1,7 @@
 """Authoritative procurement catalog — unit prices live here, not in the LLM.
 
-Spend for ``submit_po`` is derived from SKU (+ quantity) via this module. The agent
-may choose *which* SKU to buy; it must not invent a dollar amount.
+Spend for ``procurement.submit_po`` is derived from SKU (+ quantity) via this module.
+The agent may choose *which* SKU to buy; it must not invent a dollar amount.
 """
 
 from __future__ import annotations
