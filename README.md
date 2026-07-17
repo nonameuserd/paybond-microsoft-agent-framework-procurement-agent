@@ -2,7 +2,15 @@
 
 Procurement agent ([Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/) + Paybond spend gates). Clone, log in to the Paybond sandbox, and run the Harbor smoke in under a minute.
 
-This is the standalone counterpart to the sample proposed in [microsoft/agent-framework#7078](https://github.com/microsoft/agent-framework/issues/7078): **function middleware** that authorizes a paid tool call before it runs and submits a receipt afterward — the authorize → execute → evidence path lives outside the LLM.
+Standalone counterpart to the pattern discussed in [microsoft/agent-framework#7078](https://github.com/microsoft/agent-framework/issues/7078) (closed as not planned for the upstream samples tree). **Sandbox demo only** — not a production payment product.
+
+## Design choices (vs. the closed issue)
+
+| Concern | How this repo handles it |
+| --- | --- |
+| Agent invents the dollar amount | **No.** `submit_po(sku, quantity)` prices from `catalog.py`. Harbor’s spend resolver uses the same catalog lookup before the tool body runs. |
+| Separate path outside MAF function approval | Intentional for an *external* spend-authorization layer. This is a Paybond-owned demo, not an in-tree MAF sample. Framework HITL and Harbor spend are different layers. |
+| Looks production-ready because money is involved | Explicitly a **sandbox** quickstart. Treat as educational wiring, not a finance certification. |
 
 ## Quickstart (60 seconds)
 
@@ -10,65 +18,49 @@ This is the standalone counterpart to the sample proposed in [microsoft/agent-fr
 git clone https://github.com/nonameuserd/paybond-microsoft-agent-framework-procurement-agent.git
 cd paybond-microsoft-agent-framework-procurement-agent
 cp .env.example .env.local
-paybond login            # provisions a sandbox API key
+paybond login
 pip install -r requirements.txt
-npm run smoke            # or: paybond agent sandbox smoke --policy-file paybond.policy.yaml --operation submit_po --requested-spend-cents 12000 --result-body '{"status":"completed","cost_cents":12000}' --format json
+npm run smoke
 ```
 
 ## Run the demo (no LLM required)
 
 ```bash
-python app.py          # approve (~$120)
-python app.py --deny   # over-budget deny (tool body never runs)
+python app.py          # approve — LAP-14 @ $120 from catalog
+python app.py --deny   # deny — RACK-1U @ $500 (over intent budget; tool never runs)
 ```
-
-`app.py` binds a sandbox run and pushes one synthetic `submit_po` call through the **exact function-middleware body** used by a live agent — so you can prove the gate without spending tokens.
 
 ## What this shows
 
-Paybond wraps Microsoft Agent Framework tool calls at the function-middleware boundary. Side-effecting tools use `@tool(approval_mode="never_require")` so Paybond — not the framework's built-in human-in-the-loop — is the sole spend authority.
-
 | Path | What happens |
 | --- | --- |
-| **Approve** | Harbor verifies spend → `submit_po` runs → auto-evidence / receipt |
-| **Deny** | Over-budget / hard deny → tool body never runs (error string returned to the model) |
-| **Approval hold** | Operator approves in the tenant console, then the retry carries the `approvalToken` |
-
-Read-only tools like `search_catalog` are marked `side_effecting: false` in the policy and pass straight through without an authorization call.
+| **Approve** | Harbor verifies catalog-derived spend → `submit_po` runs → auto-evidence |
+| **Deny** | Over-budget SKU → tool body never runs (error string returned to the model) |
+| **Approval hold** | Operator approves in the tenant console, then retry with `approvalToken` |
 
 ## Live agent kickoff (needs an LLM)
-
-`agent.py` wires the middleware into a real `Agent`. It uses Azure AI Foundry via `AzureCliCredential`, but any Agent Framework `ChatClient` works — swap `FoundryChatClient` for your provider.
 
 ```bash
 az login
 python agent.py
 ```
 
-The Paybond wiring comes from one call:
+Prompt asks for a laptop by description — the model must pick a **SKU**, not invent `$120`. Wiring:
 
 ```python
-result = await paybond.agent(
-    policy="./paybond.policy.yaml",
-    framework="microsoft-agent-framework",
-    tools=[search_catalog, submit_po],
-    bootstrap={"operation": "submit_po", "requested_spend_cents": 12000, "completion_preset": "cost_and_completion"},
-)
+run = await bind_procurement_run(paybond)  # spend_cents = catalog(sku) × qty
+maf = maf_config_for_run(run, [search_catalog, submit_po])
 
 Agent(
     client=chat_client,
-    tools=result.tools,               # passthrough tools
-    middleware=result.hooks.middleware,  # Paybond spend gate
+    tools=maf.tools,
+    middleware=maf.middleware,  # Paybond spend gate
 )
 ```
 
-## Policy
-
-Local `paybond.policy.yaml` is yours to edit. Tool keys must match the Agent Framework tool names (function names). The bundled intent budget caps spend at **$250**.
-
 ## Tenant isolation
 
-Tenant context is derived entirely from the authenticated Paybond credential and the bound run. Tool arguments, agent names, and framework session state are **never** used to infer a tenant or operator identity.
+Tenant context comes only from the authenticated Paybond credential and the bound run — never from tool args, agent names, or framework session state.
 
 ## Docs
 

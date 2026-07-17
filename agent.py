@@ -1,78 +1,69 @@
 """Live Microsoft Agent Framework procurement agent gated by Paybond spend controls.
 
-The Paybond function middleware is the sole spend authority here: side-effecting
-tools use ``approval_mode="never_require"`` so Harbor (not the framework's HITL)
-decides allow / deny / approval-hold, then submits completion evidence.
+Design notes (addressing common objections to in-tree samples):
 
-Requires a Microsoft Agent Framework chat client with credentials. This sample uses
-Azure AI Foundry via ``AzureCliCredential`` (run ``az login`` first). Any Agent
-Framework ``ChatClient`` works — swap ``FoundryChatClient`` for your provider.
+- **Cost is not agent-decided.** ``submit_po(sku, quantity)`` prices from ``catalog``;
+  Harbor's spend resolver uses the same function before the tool body runs. The model
+  may pick a SKU; it must not invent ``amount_cents``.
+- **Sandbox demo, not a production finance product.** Use for learning the authorize →
+  execute → evidence path. Real money raises the bar on testing and ops.
+- **Middleware vs MAF HITL.** ``approval_mode="never_require"`` makes Paybond the spend
+  authority for this demo. Framework human-approval and Harbor spend gates are different
+  layers; this sample focuses on the economic side-effect path.
 
-For a no-LLM Harbor authorize + evidence smoke, use ``python app.py`` instead.
+Requires a Microsoft Agent Framework chat client. This sample uses Azure AI Foundry via
+``AzureCliCredential`` (``az login``). Swap ``FoundryChatClient`` for any ``ChatClient``.
+
+For a no-LLM Harbor smoke: ``python app.py`` / ``python app.py --deny``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Annotated
+from typing import Annotated, Any
 
 from agent_framework import Agent, tool
 from agent_framework.foundry import FoundryChatClient
 from azure.identity.aio import AzureCliCredential
 from pydantic import Field
 
+from catalog import lookup, search, spend_cents_for
 from paybond_config import create_paybond_client
-
-PRIMARY_OPERATION = "submit_po"
+from paybond_wiring import PRIMARY_OPERATION, bind_procurement_run, maf_config_for_run
 
 
 @tool
 def search_catalog(
     query: Annotated[str, Field(description="Free-text catalog search query.")],
-) -> str:
+) -> dict[str, Any]:
     """Search the procurement catalog (read-only; not side-effecting)."""
-    return json.dumps(
-        {
-            "query": query,
-            "items": [
-                {"sku": "LAP-14", "vendor_id": "vendor-acme", "unit_cents": 12_000},
-                {"sku": "MON-27", "vendor_id": "vendor-north", "unit_cents": 8_900},
-            ],
-        }
-    )
+    return {"query": query, "items": search(query)}
 
 
 @tool(approval_mode="never_require")
 def submit_po(
-    vendor_id: Annotated[str, Field(description="Vendor identifier for the purchase order.")],
-    amount_cents: Annotated[int, Field(description="Purchase order amount in cents.")],
-) -> str:
-    """Submit a purchase order. Paybond Harbor must approve before this runs."""
-    return json.dumps(
-        {
-            "status": "completed",
-            "vendor_id": vendor_id,
-            "cost_cents": amount_cents,
-            "po_id": f"po-{vendor_id}-{amount_cents}",
-        }
-    )
+    sku: Annotated[str, Field(description="Catalog SKU to purchase (e.g. LAP-14).")],
+    quantity: Annotated[int, Field(description="Units to order.", ge=1)] = 1,
+) -> dict[str, Any]:
+    """Submit a purchase order. Price comes from the catalog, not from the model."""
+    item = lookup(sku)
+    cost_cents = spend_cents_for(sku, quantity)
+    return {
+        "status": "completed",
+        "sku": item["sku"],
+        "vendor_id": item["vendor_id"],
+        "quantity": quantity,
+        "cost_cents": cost_cents,
+        "po_id": f"po-{item['sku']}-x{quantity}",
+    }
 
 
 async def main() -> None:
     """Bind a sandbox run, attach the Paybond middleware, and kick off one PO request."""
     paybond = await create_paybond_client()
     try:
-        result = await paybond.agent(
-            policy="./paybond.policy.yaml",
-            framework="microsoft-agent-framework",
-            tools=[search_catalog, submit_po],
-            bootstrap={
-                "operation": PRIMARY_OPERATION,
-                "requested_spend_cents": 12_000,
-                "completion_preset": "cost_and_completion",
-            },
-        )
+        run = await bind_procurement_run(paybond)
+        maf = maf_config_for_run(run, [search_catalog, submit_po])
 
         async with (
             AzureCliCredential() as credential,
@@ -80,17 +71,16 @@ async def main() -> None:
                 client=FoundryChatClient(credential=credential),
                 name="ProcurementAgent",
                 instructions=(
-                    "You buy hardware within policy. Search the catalog, then submit a PO "
-                    "with submit_po. Never exceed approved spend; if Paybond denies or holds "
-                    "the spend, report the reason instead of retrying."
+                    "You buy hardware within policy. Search the catalog for a SKU, then call "
+                    f"{PRIMARY_OPERATION} with that sku and quantity only — never invent a "
+                    "dollar amount. If Paybond denies or holds spend, report the reason."
                 ),
-                # Paybond gates side-effecting tools via function middleware.
-                tools=result.tools,
-                middleware=result.hooks.middleware,
+                tools=maf.tools,
+                middleware=maf.middleware,
             ) as agent,
         ):
             response = await agent.run(
-                "Find a 14-inch laptop and submit a PO to vendor-acme for $120."
+                "Find a 14-inch laptop and submit a purchase order for one unit."
             )
             print(response.text)
     finally:
